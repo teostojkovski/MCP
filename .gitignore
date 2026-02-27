@@ -1,0 +1,19 @@
+# --- Enviornmental variables ---
+.env
+
+__pycache__/
+*.py[cod]
+
+# --- Virtual environments ---
+venv/
+env/
+.venv/
+
+# --- Development ---
+*.log
+
+# --- Testing ---
+migrations/
+scripts/
+templates/
+finki_admin.py
