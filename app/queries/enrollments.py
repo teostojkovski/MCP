@@ -11,6 +11,7 @@ from app.models import (
     ExamSession,
     Program,
     ProgramSubject,
+    ProgramSemesterRule,
     SubjectPrerequisite,
     SubjectRequirement,
 )
@@ -110,6 +111,33 @@ def compute_student_ects(student_index: int) -> int:
         session.close()
 
 
+def _count_student_electives_in_pool(
+    session,
+    student_index: int,
+    semester: int,
+    elective_group_code: str,
+    program_id: int,
+) -> int:
+    """
+    Count how many electives the student is enrolled in for this semester and pool.
+    """
+    return (
+        session.query(Enrollment)
+        .join(
+            ProgramSubject,
+            (ProgramSubject.subject_code == Enrollment.subject_code)
+            & (ProgramSubject.program_id == program_id),
+        )
+        .filter(
+            Enrollment.student_index == student_index,
+            Enrollment.semester == semester,
+            ProgramSubject.is_mandatory == False,
+            ProgramSubject.elective_group_code == elective_group_code,
+        )
+        .count()
+    )
+
+
 def _check_max_semester_load(session, student_index: int, semester: int) -> None:
     count = (
         session.query(Enrollment)
@@ -132,6 +160,24 @@ def check_max_semester_load(student_index: int, semester: int) -> None:
     session = SessionLocal()
     try:
         _check_max_semester_load(session, student_index, semester)
+    finally:
+        session.close()
+
+
+def count_student_electives(
+    student_index: int,
+    semester: int,
+    elective_group_code: str,
+    program_id: int,
+) -> int:
+    """
+    Count how many electives the student is enrolled in for this semester and pool.
+    """
+    session = SessionLocal()
+    try:
+        return _count_student_electives_in_pool(
+            session, student_index, semester, elective_group_code, program_id
+        )
     finally:
         session.close()
 
@@ -227,23 +273,33 @@ def check_prerequisites(student_index: int, subject_code: str) -> None:
         session.close()
 
 
-def _check_min_ects_requirement(
+def _check_subject_requirements(
     session, student_index: int, subject_code: str
 ) -> None:
+    """Check subject_requirements: min_ects and min_passed_subjects."""
     requirement = (
         session.query(SubjectRequirement)
         .filter(SubjectRequirement.subject_code == subject_code)
         .first()
     )
-    if not requirement or requirement.min_ects is None:
+    if not requirement:
         return
 
-    total_ects = _compute_student_ects(session, student_index)
-    if total_ects < requirement.min_ects:
-        raise ValueError(
-            f"Cannot enroll: requires at least {requirement.min_ects} ECTS, "
-            f"student has {total_ects}"
-        )
+    if requirement.min_ects is not None:
+        total_ects = _compute_student_ects(session, student_index)
+        if total_ects < requirement.min_ects:
+            raise ValueError(
+                f"Cannot enroll: requires at least {requirement.min_ects} ECTS, "
+                f"student has {total_ects}"
+            )
+
+    if requirement.min_passed_subjects is not None:
+        passed_codes = _get_passed_subject_codes(session, student_index)
+        if len(passed_codes) < requirement.min_passed_subjects:
+            raise ValueError(
+                f"Cannot enroll: requires at least {requirement.min_passed_subjects} passed subjects, "
+                f"student has {len(passed_codes)}"
+            )
 
 
 def list_enrollments(
@@ -347,6 +403,38 @@ def create_enrollment(
         if not mapping:
             raise ValueError("Cannot enroll: subject not in student's program")
 
+        max_semester = student.year_of_study * 2
+        if mapping.semester > max_semester:
+            raise ValueError(
+                f"Cannot enroll: subject is in curriculum semester {mapping.semester}; "
+                f"student in year {student.year_of_study} may enroll only in semesters 1–{max_semester}"
+            )
+
+        if not mapping.is_mandatory and mapping.elective_group_code:
+            rules = (
+                session.query(ProgramSemesterRule)
+                .filter(
+                    ProgramSemesterRule.program_id == program.id,
+                    ProgramSemesterRule.semester == semester,
+                    ProgramSemesterRule.elective_group_code == mapping.elective_group_code,
+                )
+                .all()
+            )
+            total_slots = sum(r.slots for r in rules)
+            current_count = _count_student_electives_in_pool(
+                session,
+                student_index,
+                semester,
+                mapping.elective_group_code,
+                program.id,
+            )
+            if current_count >= total_slots:
+                raise ValueError(
+                    f"Cannot enroll: elective pool '{mapping.elective_group_code}' "
+                    f"allows at most {total_slots} subject(s) in semester {semester}; "
+                    f"already enrolled in {current_count}"
+                )
+
         existing = session.query(Enrollment).filter(
             Enrollment.student_index == student_index,
             Enrollment.subject_code == subject_code,
@@ -362,7 +450,7 @@ def create_enrollment(
 
         _check_prerequisites(session, student_index, subject_code)
 
-        _check_min_ects_requirement(session, student_index, subject_code)
+        _check_subject_requirements(session, student_index, subject_code)
 
         enrollment = Enrollment(
             student_index=student_index,

@@ -33,10 +33,17 @@ from app.queries.enrollments import (
     list_enrollments,
     create_enrollment,
     update_enrollment,
-    get_students_in_subject_with_status
+    get_students_in_subject_with_status,
+    count_student_electives,
 )
-from app.queries.programs import list_programs, get_subjects_by_program
-
+from app.queries.programs import (
+    list_programs,
+    get_subjects_by_program,
+    get_curriculum_by_program,
+    get_semester_mandatory_subjects,
+    get_semester_elective_pools,
+    get_subject_pool,
+)
 __all__ = [
     "get_student",
     "get_student_by_name",
@@ -65,4 +72,9 @@ __all__ = [
     "get_students_in_subject_with_status",
     "list_programs",
     "get_subjects_by_program",
+    "get_curriculum_by_program",
+    "get_semester_mandatory_subjects",
+    "get_semester_elective_pools",
+    "get_subject_pool",
+    "count_student_electives",
 ]

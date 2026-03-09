@@ -48,13 +48,28 @@ ADMIN_WRITE_TOOLS = {
     "subject_create",
 }
 
+CONSULTATION_TOOLS = {
+    "consultation_list_professors",
+    "consultation_list_available_slots",
+    "consultation_book_slot",
+    "consultation_cancel_booking",
+    "consultation_list_my_bookings",
+    "consultation_create_availability",
+    "consultation_edit_availability",
+    "consultation_block_date",
+    "consultation_unblock_date",
+    "consultation_list_blocked_dates",
+}
+
 
 def is_allowed(tool_name: str, role: str) -> bool:
     """
     - student: read tools only (handlers should restrict to own data).
-    - professor: read tools + exam_record_create, exam_record_update.
+    - professor: read tools + exam_record_create, exam_record_update + consultation (own).
     - admin: everything.
+    Role is normalized to lowercase so "Admin" / "admin" both work.
     """
+    role = (role or "").strip().lower()
     if not role:
         return False
 
@@ -66,6 +81,9 @@ def is_allowed(tool_name: str, role: str) -> bool:
 
     if tool_name in ADMIN_WRITE_TOOLS:
         return role == "admin"
+
+    if tool_name in CONSULTATION_TOOLS:
+        return role in {"student", "professor", "admin"}
 
     return False
 
@@ -93,10 +111,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if not session:
             return [TextContent(type="text", text="NOT_AUTHENTICATED: session expired, call auth_start")]
 
-        if not is_allowed(name, session.role):
+        role = (session.role or "").strip().lower()
+        if not is_allowed(name, role):
             return [TextContent(type="text", text="FORBIDDEN")]
 
-        arguments["_user"] = {"user_id": session.user_id, "role": session.role}
+        arguments["_user"] = {"user_id": session.user_id, "role": role}
 
     tool_def = TOOL_MAP[name]
     return await tool_def.handler(arguments)

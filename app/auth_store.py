@@ -139,6 +139,9 @@ def _cleanup_expired_conn(c: sqlite3.Connection) -> None:
 def approve_user_code(user_code: str, user_id: str, role: str) -> bool:
     if not user_code or not user_id or not role:
         return False
+    role = (str(role) or "").strip().lower()
+    if not role:
+        return False
     _ensure_db()
     now = _iso(_now())
 
@@ -147,7 +150,7 @@ def approve_user_code(user_code: str, user_id: str, role: str) -> bool:
         cur = c.execute(
             """UPDATE pending_logins SET approved = 1, user_id = ?, role = ?
                WHERE user_code = ? AND expires_at > ?""",
-            (str(user_id), str(role), user_code, now),
+            (str(user_id), role, user_code, now),
         )
         if cur.rowcount == 0:
             return False
@@ -197,10 +200,11 @@ def exchange_device_code_for_session(device_code: str, ttl_hours: int = 8) -> Op
         c.execute("DELETE FROM pending_logins WHERE device_code = ?",
                   (device_code,))
 
+    role = (row["role"] or "").strip().lower()
     return Session(
         session_id=session_id,
         user_id=row["user_id"],
-        role=row["role"],
+        role=role,
         created_at=now,
         expires_at=expires_at,
     )
@@ -221,10 +225,11 @@ def get_session(session_id: str) -> Optional[Session]:
         ).fetchone()
     if not row:
         return None
+    role = (row["role"] or "").strip().lower()
     return Session(
         session_id=row["session_id"],
         user_id=row["user_id"],
-        role=row["role"],
+        role=role,
         created_at=_parse_dt(row["created_at"]),
         expires_at=_parse_dt(row["expires_at"]),
     )

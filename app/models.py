@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone, time
 
 from sqlalchemy import (
     Boolean,
@@ -11,6 +11,8 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     Index,
+    Time,
+    DateTime,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -323,6 +325,105 @@ class DisciplinaryAction(Base):
     student = relationship("Student", back_populates="disciplinary_actions")
 
 
+class Professor(Base):
+    __tablename__ = "professors"
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True)
+    first_name: Mapped[str] = mapped_column(String(60), nullable=False)
+    last_name: Mapped[str] = mapped_column(String(60), nullable=False)
+    email: Mapped[str] = mapped_column(
+        String(120), unique=True, nullable=False)
+
+    availabilities = relationship(
+        "ConsultationAvailability",
+        back_populates="professor",
+        cascade="all, delete-orphan"
+    )
+
+    bookings = relationship(
+        "ConsultationBooking",
+        back_populates="professor",
+        cascade="all, delete-orphan"
+    )
+
+    blocked_dates = relationship(
+        "ConsultationBlock",
+        back_populates="professor",
+        cascade="all, delete-orphan"
+    )
+
+
+class ConsultationAvailability(Base):
+    __tablename__ = "consultation_availability"
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True)
+
+    professor_id: Mapped[int] = mapped_column(
+        ForeignKey("professors.id"), nullable=False
+    )
+
+    day_of_week: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+
+    slot_duration: Mapped[int] = mapped_column(Integer, default=30)
+
+    professor = relationship("Professor", back_populates="availabilities")
+
+
+class ConsultationBlock(Base):
+    """Professor blocks a specific date so no consultations are offered that day."""
+    __tablename__ = "consultation_blocks"
+    __table_args__ = (
+        UniqueConstraint("professor_id", "date", name="uq_consultation_block_date"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True)
+    professor_id: Mapped[int] = mapped_column(
+        ForeignKey("professors.id"), nullable=False)
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    professor = relationship("Professor", back_populates="blocked_dates")
+
+
+class ConsultationBooking(Base):
+    __tablename__ = "consultation_bookings"
+    __table_args__ = (
+        UniqueConstraint(
+            "professor_id", "date", "start_time",
+            name="uq_professor_date_start"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True)
+
+    professor_id: Mapped[int] = mapped_column(
+        ForeignKey("professors.id"), nullable=False
+    )
+
+    student_index: Mapped[int] = mapped_column(
+        ForeignKey("students.index"), nullable=False
+    )
+
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+    professor = relationship("Professor", back_populates="bookings")
+    student = relationship("Student")
+
+
 class User(Base):
     """Device-login users: username + password, role from DB (no user input)."""
     __tablename__ = "users"
@@ -334,3 +435,8 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
 
     role: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    professor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("professors.id"), nullable=True)
+    student_index: Mapped[int | None] = mapped_column(
+        ForeignKey("students.index"), nullable=True)

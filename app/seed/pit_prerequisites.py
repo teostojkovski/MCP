@@ -70,52 +70,37 @@ def seed_pit_prerequisites(session) -> None:
     """
     Seed example PIT prerequisites/requirements.
     """
-    # 1) Single prerequisite:
-    #    Object-Oriented Programming requires Structural Programming
+
     _ensure_prereq(
         session,
-        subject_code="F23L1S016",  # OOP
-        prereq_subject_code="F23L1W020",  # Structural Programming
+        subject_code="F23L1S016",
+        prereq_subject_code="F23L1W020",
         note="OOP requires Structural Programming",
     )
 
-    # 2) OR prerequisite group:
-    #    Operating Systems requires (Computer Architecture and Organization OR
-    #    some alternative architecture course).
     _ensure_prereq(
         session,
-        subject_code="F23L2S017",  # Operating Systems
-        prereq_subject_code="F23L1S003",  # Архитектура и организација на компјутери
+        subject_code="F23L2S017",
+        prereq_subject_code="F23L1S003",
         any_of_group="OS_ARCH_OR",
         note="OS requires at least one architecture course",
     )
     _ensure_prereq(
         session,
         subject_code="F23L2S017",
-        prereq_subject_code="F23L1S045",  # Компјутерски архитектури (alternative architecture course)
+        prereq_subject_code="F23L1S045",
         any_of_group="OS_ARCH_OR",
         note="OS requires at least one architecture course",
     )
 
-    # 3) ECTS minimum:
-    #    Team project requires min 150 ECTS
     _ensure_requirement(
         session,
-        subject_code="F23L3W021",  # Тимски проект
+        subject_code="F23L3W021",
         min_ects=150,
     )
 
-    # 4) Subject with no prerequisites:
-    #    Web Programming – explicitly has no prereqs / requirements
     _ensure_requirement(
         session,
-        subject_code="F23L3W024",  # Веб програмирање
+        subject_code="F23L3W024",
         min_ects=None,
     )
-
-    # 5) Example for testing max 6 enrollments:
-    #    No DB rule needed – this is enforced in code by counting
-    #    enrollments per (student_index, semester). Create multiple
-    #    enrollments for the same student/semester in tests to hit
-    #    the “already enrolled in 6 subjects” branch.
-

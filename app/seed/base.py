@@ -138,6 +138,12 @@ def ensure_semester_rule_slot(
         )
 
 
+def clear_program_curriculum(session, program_id: int) -> None:
+    """Remove all program_subjects and program_semester_rules for a program."""
+    session.query(ProgramSubject).filter(ProgramSubject.program_id == program_id).delete()
+    session.query(ProgramSemesterRule).filter(ProgramSemesterRule.program_id == program_id).delete()
+
+
 def run_seed(seed_fn: Callable) -> None:
     """Run a seed function in a managed session with commit/rollback."""
     session = SessionLocal()
