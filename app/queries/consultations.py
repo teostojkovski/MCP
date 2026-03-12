@@ -5,7 +5,7 @@ anywhere inside; the system checks the interval fits in a free part of the frame
 """
 from __future__ import annotations
 
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from app.db import SessionLocal
@@ -13,6 +13,7 @@ from app.models import (
     ConsultationAvailability,
     ConsultationBlock,
     ConsultationBooking,
+    ConsultationEmailLog,
     Professor,
     Student,
 )
@@ -577,3 +578,205 @@ def get_user_identity(session_id: str) -> Optional[Dict[str, Any]]:
         }
     finally:
         db.close()
+
+
+def _normalize_email(value: Any) -> Optional[str]:
+    """Return a non-empty trimmed string or None. Used for student/professor email."""
+    if value is None:
+        return None
+    s = (value or "").strip()
+    return s if s and "@" in s else None
+
+
+def get_booking_for_email(booking_id: int, student_index: int) -> Optional[Dict[str, Any]]:
+    """
+    Get booking with professor and student details for email. Returns None if booking
+    not found or does not belong to this student. Student email: primary from
+    students.email, fallback student{index}@gmail.com only when primary is missing.
+    """
+    session = SessionLocal()
+    try:
+        booking = (
+            session.query(ConsultationBooking)
+            .filter(ConsultationBooking.id == booking_id)
+            .filter(ConsultationBooking.student_index == student_index)
+            .first()
+        )
+        if not booking:
+            return None
+        prof = session.query(Professor).filter(
+            Professor.id == booking.professor_id).first()
+        student = session.query(Student).filter(
+            Student.index == booking.student_index).first()
+        if not prof or not student:
+            return None
+        student_email_raw = getattr(student, "email", None)
+        student_email_valid = _normalize_email(student_email_raw)
+        student_email = student_email_valid if student_email_valid else f"student{student.index}@gmail.com"
+        prof_email = _normalize_email(prof.email)
+        if not prof_email:
+            return None
+        return {
+            "booking_id": booking.id,
+            "date": booking.date.isoformat(),
+            "start_time": booking.start_time.strftime("%H:%M"),
+            "end_time": booking.end_time.strftime("%H:%M"),
+            "professor_name": f"{prof.first_name} {prof.last_name}",
+            "professor_email": prof_email,
+            "student_name": f"{student.first_name} {student.last_name}",
+            "student_email": student_email,
+            "_student_email_from_db": student_email_valid is not None,
+        }
+    finally:
+        session.close()
+
+
+def consultation_email_already_sent(booking_id: int) -> bool:
+    """True if we already logged a successful send for this booking."""
+    session = SessionLocal()
+    try:
+        return (
+            session.query(ConsultationEmailLog)
+            .filter(ConsultationEmailLog.booking_id == booking_id)
+            .filter(ConsultationEmailLog.status == "sent")
+            .first()
+            is not None
+        )
+    finally:
+        session.close()
+
+
+def compose_consultation_email(
+    booking_id: int,
+    student_index: int,
+    consultation_reason: str,
+) -> tuple[str, str]:
+    """
+    Compose subject and body for the professor consultation email. Raises ValueError
+    if booking not found or not owned by student.
+    """
+    data = get_booking_for_email(booking_id, student_index)
+    if not data:
+        raise ValueError("Booking not found or does not belong to you.")
+    reason = (consultation_reason or "").strip() or "General consultation"
+    subject = f"Consultation request – {data['date']} {data['start_time']} – {data['student_name']}"
+    body = (
+        f"Dear {data['professor_name']},\n\n"
+        f"I have booked a consultation with you on {data['date']} at {data['start_time']}–{data['end_time']}.\n\n"
+        f"Reason for the consultation:\n{reason}\n\n"
+        f"Best regards,\n{data['student_name']}\n{data['student_email']}"
+    )
+    return subject, body
+
+
+def log_consultation_email(
+    booking_id: int,
+    student_index: int,
+    professor_id: int,
+    provider: str,
+    provider_message_id: Optional[str],
+    subject: str,
+    body: str,
+    status: str,
+    sent_at: Optional[datetime] = None,
+    error_message: Optional[str] = None,
+) -> None:
+    session = SessionLocal()
+    try:
+        log = ConsultationEmailLog(
+            booking_id=booking_id,
+            student_index=student_index,
+            professor_id=professor_id,
+            provider=provider,
+            provider_message_id=provider_message_id,
+            subject=subject,
+            body=body,
+            status=status,
+            sent_at=sent_at or datetime.now(timezone.utc),
+            error_message=error_message,
+        )
+        session.add(log)
+        session.commit()
+    finally:
+        session.close()
+
+
+def send_consultation_email_for_booking(
+    booking_id: int,
+    student_index: int,
+    consultation_reason: str,
+) -> Dict[str, Any]:
+    """
+    Compose, send via Resend, and log. Returns {"sent": True, "message_id": "..."} or
+    {"sent": False, "error": "..."}. Prevents duplicate sends for same booking.
+    """
+    if consultation_email_already_sent(booking_id):
+        return {"sent": False, "error": "An email for this booking was already sent."}
+    data = get_booking_for_email(booking_id, student_index)
+    if not data:
+        return {"sent": False, "error": "Booking not found or does not belong to you."}
+    if not data.get("_student_email_from_db"):
+        return {
+            "sent": False,
+            "error": (
+                f"Student (table students, column email) is missing for the student linked to this booking "
+                f"(students.index={student_index}). Re-run the consultation seed to backfill placeholder emails: "
+                "py -m app.seed.consultations"
+            ),
+        }
+    if not data.get("professor_email"):
+        return {
+            "sent": False,
+            "error": (
+                f"Professor (table professors, column email) is missing for professor_id linked to this booking. "
+                "Re-run the consultation seed."
+            ),
+        }
+    subject, body = compose_consultation_email(
+        booking_id, student_index, consultation_reason)
+    professor_id = None
+    session = SessionLocal()
+    try:
+        b = session.query(ConsultationBooking).filter(
+            ConsultationBooking.id == booking_id).first()
+        professor_id = b.professor_id if b else None
+    finally:
+        session.close()
+    if not professor_id:
+        return {"sent": False, "error": "Booking not found."}
+    try:
+        from app.mail import send_consultation_email as mail_send
+        result = mail_send(
+            to_email=data["professor_email"],
+            subject=subject,
+            body_plain=body,
+            reply_to=data["student_email"],
+        )
+        msg_id = result.get("id")
+        log_consultation_email(
+            booking_id=booking_id,
+            student_index=student_index,
+            professor_id=professor_id,
+            provider="resend",
+            provider_message_id=msg_id,
+            subject=subject,
+            body=body,
+            status="sent",
+            sent_at=None,
+            error_message=None,
+        )
+        return {"sent": True, "message_id": msg_id}
+    except Exception as e:
+        log_consultation_email(
+            booking_id=booking_id,
+            student_index=student_index,
+            professor_id=professor_id,
+            provider="resend",
+            provider_message_id=None,
+            subject=subject,
+            body=body,
+            status="failed",
+            sent_at=None,
+            error_message=str(e)[:1000],
+        )
+        return {"sent": False, "error": str(e)}

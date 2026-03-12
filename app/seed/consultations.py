@@ -12,7 +12,9 @@ from app.models import (
     ConsultationAvailability,
     ConsultationBlock,
     ConsultationBooking,
+    ConsultationEmailLog,
     Professor,
+    Student,
     User,
 )
 from app.queries.students import search_students
@@ -31,12 +33,75 @@ def _ensure_user_columns(session) -> None:
             session.rollback()
 
 
+def _ensure_student_email_column(session) -> None:
+    """Add email column to students table if missing."""
+    from sqlalchemy import text
+    try:
+        session.execute(
+            text("ALTER TABLE students ADD COLUMN email VARCHAR(120)"))
+        session.commit()
+    except Exception:
+        session.rollback()
+
+
+def _ensure_professor_email_no_unique(engine) -> None:
+    """Drop UNIQUE on professors.email so all can use shared inbox (consultations.mcp@gmail.com)."""
+    from sqlalchemy import text
+    driver = engine.url.drivername or ""
+    with engine.connect() as conn:
+        try:
+            if "postgresql" in driver:
+                conn.execute(
+                    text("ALTER TABLE professors DROP CONSTRAINT IF EXISTS professors_email_key"))
+                conn.commit()
+            elif "sqlite" in driver:
+                row = conn.execute(
+                    text(
+                        "SELECT sql FROM sqlite_master WHERE type='table' AND name='professors'")
+                ).fetchone()
+                if not row or "UNIQUE" not in (row[0] or ""):
+                    return
+                conn.execute(text("PRAGMA foreign_keys=OFF"))
+                conn.execute(text(
+                    "CREATE TABLE professors_new ("
+                    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                    "first_name VARCHAR(60) NOT NULL, "
+                    "last_name VARCHAR(60) NOT NULL, "
+                    "email VARCHAR(120) NOT NULL)"
+                ))
+                conn.execute(text(
+                    "INSERT INTO professors_new (id, first_name, last_name, email) "
+                    "SELECT id, first_name, last_name, email FROM professors"
+                ))
+                conn.execute(text("DROP TABLE professors"))
+                conn.execute(
+                    text("ALTER TABLE professors_new RENAME TO professors"))
+                conn.execute(text("PRAGMA foreign_keys=ON"))
+                conn.commit()
+        except Exception:
+            conn.rollback()
+
+
+def _student_placeholder_email(first_name: str, last_name: str, index: int) -> str:
+    """Valid English-format email: firstname.lastname@gmail.com (Cyrillic transliterated to Latin)."""
+    from app.student_email import student_placeholder_email
+    return student_placeholder_email(first_name, last_name, index)
+
+
+def _normalize_student_email(student) -> bool:
+    """True if student has a non-empty email (column students.email)."""
+    email = getattr(student, "email", None)
+    return bool(email and isinstance(email, str) and email.strip() and "@" in email.strip())
+
+
 SEED_PASSWORD = "test123"
 
+PROFESSOR_EMAIL = "consultations.mcp@gmail.com"
+
 PROFESSORS_DATA = [
-    ("Ана", "Јовановска", "ana.jovanovska@finki.ukim.mk"),
-    ("Борче", "Ивановски", "borche.ivanovski@finki.ukim.mk"),
-    ("Вера", "Стојановска", "vera.stojanovska@finki.ukim.mk"),
+    ("Ана", "Јовановска"),
+    ("Борче", "Ивановски"),
+    ("Вера", "Стојановска"),
 ]
 
 
@@ -50,25 +115,35 @@ def seed_consultations(session) -> None:
             ConsultationAvailability.__table__,
             ConsultationBlock.__table__,
             ConsultationBooking.__table__,
+            ConsultationEmailLog.__table__,
         ],
     )
     _ensure_user_columns(session)
+    _ensure_student_email_column(session)
+    _ensure_professor_email_no_unique(engine)
     professors = []
-    for first_name, last_name, email in PROFESSORS_DATA:
-        p = session.query(Professor).filter(Professor.email == email).first()
-        if not p:
+    for first_name, last_name in PROFESSORS_DATA:
+        existing = session.query(Professor).filter(
+            Professor.first_name == first_name,
+            Professor.last_name == last_name,
+        ).first()
+        if existing:
+            existing.email = PROFESSOR_EMAIL
+            p = existing
+        else:
             p = Professor(
                 first_name=first_name,
                 last_name=last_name,
-                email=email,
+                email=PROFESSOR_EMAIL,
             )
             session.add(p)
             session.flush()
         professors.append(p)
 
+    session.query(Professor).update(
+        {Professor.email: PROFESSOR_EMAIL}, synchronize_session=False)
+
     students = search_students(limit=3)
-    if len(students) < 3:
-        pass
 
     for i, p in enumerate(professors):
         username = f"prof_{p.id}"
@@ -110,6 +185,26 @@ def seed_consultations(session) -> None:
         session.add(admin)
 
     session.flush()
+
+    student_indexes_with_user = [
+        row[0]
+        for row in session.query(User.student_index)
+        .filter(User.student_index.isnot(None))
+        .distinct()
+        .all()
+    ]
+    for idx in student_indexes_with_user:
+        st = session.query(Student).filter(Student.index == idx).first()
+        if st:
+            st.email = _student_placeholder_email(
+                st.first_name, st.last_name, st.index
+            )
+    for s in students:
+        st = session.query(Student).filter(Student.index == s["index"]).first()
+        if st and not _normalize_student_email(st):
+            st.email = _student_placeholder_email(
+                st.first_name, st.last_name, st.index
+            )
 
     for p in professors:
         session.query(ConsultationAvailability).filter(
@@ -212,14 +307,24 @@ def write_credentials(credentials_path: Path) -> None:
         for s in students:
             u = session.query(User).filter(
                 User.student_index == s["index"]).first()
+            st = session.query(Student).filter(
+                Student.index == s["index"]).first()
+            email = st.email if st and getattr(st, "email", None) else ""
+            extra = f" email `{email}`" if email else ""
             if u:
                 lines.append(
-                    f"- **{s['first_name']} {s['last_name']}** (index {s['index']}): username `{u.username}`")
+                    f"- **{s['first_name']} {s['last_name']}** (index {s['index']}): username `{u.username}`{extra}")
         lines.append("")
         lines.append("## Admin")
         admin = session.query(User).filter(User.role == "admin").first()
         if admin:
             lines.append(f"- username `{admin.username}`")
+        lines.append("")
+        lines.append("## Consultation email (Resend)")
+        lines.append(
+            "Set in .env: `RESEND_API_KEY`, `EMAIL_FROM` (e.g. onboarding@resend.dev).")
+        lines.append(
+            "Professors receive at consultations.mcp@gmail.com (shared inbox).")
     finally:
         session.close()
 

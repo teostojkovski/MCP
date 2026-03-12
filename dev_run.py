@@ -3,6 +3,7 @@ Web server for device login and consultations UI (finki_admin).
 Run: uvicorn dev_run:app --host 127.0.0.1 --port 8000
 Open http://127.0.0.1:8000/device to log in; http://127.0.0.1:8000/consultations to manage consultations.
 """
+from app.queries import consultations as cq
 import secrets
 from datetime import date, timedelta
 
@@ -143,7 +144,6 @@ def device_approve(request: Request, user_code: str = Form(...)):
 
 
 # ---------- Consultations UI (finki_admin) ----------
-from app.queries import consultations as cq
 
 
 def _require_session(request: Request):
@@ -469,7 +469,7 @@ def api_slots(request: Request, professor_id: int, date_from: str, date_to: str)
     if student_index is None and identity.get("role") != "admin":
         return JSONResponse({"error": "Student account required"})
     if student_index is None:
-        return JSONResponse({"error": "Pass student_index for admin"})  # admin could pass query param
+        return JSONResponse({"error": "Pass student_index for admin"})
     try:
         df = date.fromisoformat(date_from)
         dt = date.fromisoformat(date_to)
@@ -501,7 +501,8 @@ async def api_book(request: Request):
         booking_date = date.fromisoformat(date_str)
         h, m = map(int, start_time_str.split(":"))
         start_time = time(hour=h, minute=m)
-        result = cq.book_slot(student_index, professor_id, booking_date, start_time, int(duration_minutes))
+        result = cq.book_slot(student_index, professor_id,
+                              booking_date, start_time, int(duration_minutes))
         return JSONResponse({"message": "Booked", "id": result["id"]})
     except ValueError as e:
         return JSONResponse({"error": str(e)})
@@ -516,6 +517,7 @@ def api_my_bookings(request: Request):
     if student_index is None:
         return JSONResponse({"error": "Student account required"})
     bookings = cq.list_my_bookings_student(student_index)
+
     def dur(b):
         s = b.get("start_time", "0:0").split(":")
         e = b.get("end_time", "0:0").split(":")
@@ -568,8 +570,10 @@ def api_professor_availabilities(request: Request, professor_id: int):
     from app.models import ConsultationAvailability
     db = SessionLocal()
     try:
-        rows = db.query(ConsultationAvailability).filter(ConsultationAvailability.professor_id == professor_id).order_by(ConsultationAvailability.day_of_week, ConsultationAvailability.start_time).all()
-        availabilities = [{"id": a.id, "day_of_week": a.day_of_week, "start_time": a.start_time.strftime("%H:%M"), "end_time": a.end_time.strftime("%H:%M"), "slot_duration": a.slot_duration} for a in rows]
+        rows = db.query(ConsultationAvailability).filter(ConsultationAvailability.professor_id == professor_id).order_by(
+            ConsultationAvailability.day_of_week, ConsultationAvailability.start_time).all()
+        availabilities = [{"id": a.id, "day_of_week": a.day_of_week, "start_time": a.start_time.strftime(
+            "%H:%M"), "end_time": a.end_time.strftime("%H:%M"), "slot_duration": a.slot_duration} for a in rows]
         return JSONResponse({"availabilities": availabilities})
     finally:
         db.close()
@@ -590,7 +594,8 @@ async def api_add_availability(request: Request):
         start_time = time(hour=h, minute=m)
         h, m = map(int, body.get("end_time", "0:0").split(":"))
         end_time = time(hour=h, minute=m)
-        out = cq.create_availability(professor_id, int(body.get("day_of_week")), start_time, end_time, int(body.get("slot_duration", 15)))
+        out = cq.create_availability(professor_id, int(body.get(
+            "day_of_week")), start_time, end_time, int(body.get("slot_duration", 15)))
         return JSONResponse({"message": "Added", "id": out["id"]})
     except ValueError as e:
         return JSONResponse({"error": str(e)})
@@ -661,7 +666,8 @@ async def api_edit_availability(request: Request, availability_id: int):
         start_time = time(hour=h, minute=m)
         h, m = map(int, body.get("end_time", "0:0").split(":"))
         end_time = time(hour=h, minute=m)
-        out = cq.edit_availability(professor_id, availability_id, start_time, end_time, int(body.get("slot_duration", 15)))
+        out = cq.edit_availability(professor_id, availability_id, start_time, end_time, int(
+            body.get("slot_duration", 15)))
         if out is None:
             return JSONResponse({"error": "Availability not found"})
         return JSONResponse({"message": "Updated", "id": out["id"]})

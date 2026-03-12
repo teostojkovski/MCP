@@ -27,6 +27,7 @@ class Student(Base):
     index: Mapped[int] = mapped_column(Integer, primary_key=True)
     first_name: Mapped[str] = mapped_column(String(60), nullable=False)
     last_name: Mapped[str] = mapped_column(String(60), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     program: Mapped[str] = mapped_column(String(120), nullable=False)
 
@@ -333,7 +334,7 @@ class Professor(Base):
     first_name: Mapped[str] = mapped_column(String(60), nullable=False)
     last_name: Mapped[str] = mapped_column(String(60), nullable=False)
     email: Mapped[str] = mapped_column(
-        String(120), unique=True, nullable=False)
+        String(120), nullable=False)
 
     availabilities = relationship(
         "ConsultationAvailability",
@@ -378,7 +379,8 @@ class ConsultationBlock(Base):
     """Professor blocks a specific date so no consultations are offered that day."""
     __tablename__ = "consultation_blocks"
     __table_args__ = (
-        UniqueConstraint("professor_id", "date", name="uq_consultation_block_date"),
+        UniqueConstraint("professor_id", "date",
+                         name="uq_consultation_block_date"),
     )
 
     id: Mapped[int] = mapped_column(
@@ -422,6 +424,31 @@ class ConsultationBooking(Base):
 
     professor = relationship("Professor", back_populates="bookings")
     student = relationship("Student")
+
+
+class ConsultationEmailLog(Base):
+    """Log of consultation emails sent to professors (Resend)."""
+    __tablename__ = "consultation_email_logs"
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True)
+    booking_id: Mapped[int] = mapped_column(
+        ForeignKey("consultation_bookings.id"), nullable=False)
+    student_index: Mapped[int] = mapped_column(
+        ForeignKey("students.index"), nullable=False)
+    professor_id: Mapped[int] = mapped_column(
+        ForeignKey("professors.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="resend")
+    provider_message_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(String(10000), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(
+        String(1000), nullable=True)
 
 
 class User(Base):

@@ -366,6 +366,61 @@ async def consultation_list_blocked_dates_handler(arguments: dict) -> list[TextC
     return [TextContent(type="text", text=f"Blocked dates for professor {professor_id}: " + ", ".join(blocked))]
 
 
+async def consultation_draft_consultation_email_handler(arguments: dict) -> list[TextContent]:
+    """Draft the consultation email to the professor (student only). Show this to the student for confirmation before sending."""
+    identity = _identity(arguments)
+    if not identity:
+        return [TextContent(type="text", text="ERROR: Not authenticated.")]
+    if identity.get("role") != "student":
+        return [TextContent(type="text", text="ERROR: Only students can draft consultation emails.")]
+    student_index = identity.get("student_index")
+    if student_index is None:
+        return [TextContent(type="text", text="ERROR: Your account is not linked to a student.")]
+    booking_id = arguments.get("booking_id")
+    consultation_reason = (arguments.get("consultation_reason") or "").strip()
+    if not booking_id:
+        return [TextContent(type="text", text="ERROR: booking_id is required.")]
+    booking_id = int(booking_id)
+    try:
+        subject, body = cq.compose_consultation_email(booking_id, student_index, consultation_reason)
+        return [
+            TextContent(
+                type="text",
+                text=(
+                    "DRAFT – show this to the student and ask for confirmation before calling consultation_send_consultation_email.\n\n"
+                    f"Subject: {subject}\n\n"
+                    f"Body:\n{body}"
+                ),
+            )
+        ]
+    except ValueError as e:
+        return [TextContent(type="text", text=f"ERROR: {e}")]
+
+
+async def consultation_send_consultation_email_handler(arguments: dict) -> list[TextContent]:
+    """Send the consultation email to the professor (student only). Call only after the student confirmed the draft. Requires approved_by_user=true."""
+    identity = _identity(arguments)
+    if not identity:
+        return [TextContent(type="text", text="ERROR: Not authenticated.")]
+    if identity.get("role") != "student":
+        return [TextContent(type="text", text="ERROR: Only students can send consultation emails.")]
+    student_index = identity.get("student_index")
+    if student_index is None:
+        return [TextContent(type="text", text="ERROR: Your account is not linked to a student.")]
+    booking_id = arguments.get("booking_id")
+    consultation_reason = (arguments.get("consultation_reason") or "").strip()
+    approved_by_user = arguments.get("approved_by_user")
+    if not booking_id:
+        return [TextContent(type="text", text="ERROR: booking_id is required.")]
+    if approved_by_user is not True and str(approved_by_user).lower() not in ("true", "1", "yes"):
+        return [TextContent(type="text", text="ERROR: You must set approved_by_user to true after the student has confirmed the draft.")]
+    booking_id = int(booking_id)
+    result = cq.send_consultation_email_for_booking(booking_id, student_index, consultation_reason)
+    if result.get("sent"):
+        return [TextContent(type="text", text=f"Email sent successfully. Message id: {result.get('message_id', '')}")]
+    return [TextContent(type="text", text=f"Failed to send email: {result.get('error', 'Unknown error')}")]
+
+
 CONSULTATION_TOOLS = [
     ToolDef(
         tool=Tool(
@@ -517,5 +572,36 @@ CONSULTATION_TOOLS = [
             },
         ),
         handler=consultation_list_blocked_dates_handler,
+    ),
+    ToolDef(
+        tool=Tool(
+            name="consultation_draft_consultation_email",
+            description="Draft the email to the professor about a booked consultation (student only). Use after a student books and says they want to email the professor. Ask what the consultation is for (consultation_reason), then call this to get subject and body. Show the draft to the student and only call consultation_send_consultation_email after they confirm.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "booking_id": {"type": "integer", "description": "The consultation booking id"},
+                    "consultation_reason": {"type": "string", "description": "What the consultation is about (from the student)"},
+                },
+                "required": ["booking_id", "consultation_reason"],
+            },
+        ),
+        handler=consultation_draft_consultation_email_handler,
+    ),
+    ToolDef(
+        tool=Tool(
+            name="consultation_send_consultation_email",
+            description="Send the consultation email to the professor via Resend (student only). Call only after showing the draft and getting explicit student confirmation. Must pass approved_by_user=true.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "booking_id": {"type": "integer"},
+                    "consultation_reason": {"type": "string"},
+                    "approved_by_user": {"type": "boolean", "description": "Must be true; set only after student confirmed the draft"},
+                },
+                "required": ["booking_id", "consultation_reason", "approved_by_user"],
+            },
+        ),
+        handler=consultation_send_consultation_email_handler,
     ),
 ]

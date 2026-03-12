@@ -59,6 +59,8 @@ CONSULTATION_TOOLS = {
     "consultation_block_date",
     "consultation_unblock_date",
     "consultation_list_blocked_dates",
+    "consultation_draft_consultation_email",
+    "consultation_send_consultation_email",
 }
 
 
