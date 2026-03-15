@@ -63,6 +63,10 @@ CONSULTATION_TOOLS = {
     "consultation_send_consultation_email",
 }
 
+TASK_STUDENT_TOOLS = {"task_list_my", "task_get_my", "task_submit_by_repo"}
+TASK_PROFESSOR_TOOLS = {"task_list_my_created_professor", "task_submissions_professor", "task_get_submission_repo", "task_get_submission_contents"}
+GITHUB_STUDENT_TOOLS = {"github_list_my_repos"}
+
 
 def is_allowed(tool_name: str, role: str) -> bool:
     """
@@ -86,6 +90,15 @@ def is_allowed(tool_name: str, role: str) -> bool:
 
     if tool_name in CONSULTATION_TOOLS:
         return role in {"student", "professor", "admin"}
+
+    if tool_name in TASK_STUDENT_TOOLS:
+        return role == "student"
+
+    if tool_name in TASK_PROFESSOR_TOOLS:
+        return role in {"professor", "admin"}
+
+    if tool_name in GITHUB_STUDENT_TOOLS:
+        return role == "student"
 
     return False
 

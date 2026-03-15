@@ -15,6 +15,8 @@ from app.tools.exams import EXAM_TOOLS
 from app.tools.enrollments import ENROLLMENT_TOOLS
 from app.tools.auth import AUTH_TOOLS
 from app.tools.consultations import CONSULTATION_TOOLS
+from app.tools.tasks import TASK_TOOLS
+from app.tools.github import GITHUB_TOOLS
 
 PUBLIC_TOOL_NAMES = {"auth_start", "auth_status"}
 
@@ -25,7 +27,9 @@ ALL_TOOL_DEFS: list[ToolDef] = (
     PROGRAM_TOOLS +
     EXAM_TOOLS +
     ENROLLMENT_TOOLS +
-    CONSULTATION_TOOLS
+    CONSULTATION_TOOLS +
+    TASK_TOOLS +
+    GITHUB_TOOLS
 )
 
 

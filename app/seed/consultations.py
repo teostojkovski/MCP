@@ -83,9 +83,20 @@ def _ensure_professor_email_no_unique(engine) -> None:
 
 
 def _student_placeholder_email(first_name: str, last_name: str, index: int) -> str:
-    """Valid English-format email: firstname.lastname@gmail.com (Cyrillic transliterated to Latin)."""
-    from app.student_email import student_placeholder_email
-    return student_placeholder_email(first_name, last_name, index)
+    """Valid email: firstname.lastname.index@gmail.com. Non-ASCII chars replaced with ASCII-safe."""
+    def _ascii_safe(s: str) -> str:
+        if not s:
+            return ""
+        out = []
+        for c in s.strip():
+            if c.isalnum():
+                out.append(c.lower())
+            elif c.isspace() or c in ".-_":
+                out.append(".")
+        return "".join(out).strip(".") or "student"
+    first = _ascii_safe(str(first_name))[:20]
+    last = _ascii_safe(str(last_name))[:20]
+    return f"{first}.{last}.{index}@gmail.com"
 
 
 def _normalize_student_email(student) -> bool:
@@ -157,6 +168,11 @@ def seed_consultations(session) -> None:
                 student_index=None,
             )
             session.add(u)
+        else:
+            # Fix existing professor users: ensure professor_id is set
+            u.role = "professor"
+            u.professor_id = p.id
+            u.student_index = None
 
     for i, s in enumerate(students[:3]):
         username = f"student_{s['index']}"
@@ -170,6 +186,23 @@ def seed_consultations(session) -> None:
                 student_index=s["index"],
             )
             session.add(u)
+        else:
+            # Fix existing student users: ensure student_index is set
+            u.role = "student"
+            u.professor_id = None
+            u.student_index = s["index"]
+
+    # Fix any other User with role=student and username student_<index>: set student_index from username
+    import re
+    student_user_pattern = re.compile(r"^student_(\d+)$")
+    for u in session.query(User).filter(User.role == "student").all():
+        if u.student_index is not None:
+            continue
+        m = student_user_pattern.match((u.username or "").strip())
+        if m:
+            idx = int(m.group(1))
+            if session.query(Student).filter(Student.index == idx).first():
+                u.student_index = idx
 
     admin_username = "admin"
     admin = session.query(User).filter(User.username == admin_username).first()
@@ -280,6 +313,61 @@ def seed_consultations(session) -> None:
                 )
             )
 
+    # Demo task so ALL student users see a task in the UI (no enrollment required)
+    from app.models import Base, Task, TaskAssignment, TaskSubmission, GitHubAccount, Subject
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            Task.__table__,
+            TaskAssignment.__table__,
+            TaskSubmission.__table__,
+            GitHubAccount.__table__,
+        ],
+    )
+    subject = session.query(Subject).first()
+    if subject and professors:
+        existing_task = (
+            session.query(Task)
+            .filter(Task.subject_id == subject.code, Task.title == "Demo task (seed)")
+            .first()
+        )
+        if not existing_task:
+            task = Task(
+                title="Demo task (seed)",
+                description="This task was created by the seed so student users see something in My Tasks. You can link a repo and submit (via UI or through Claude).",
+                subject_id=subject.code,
+                created_by_professor_id=professors[0].id,
+            )
+            session.add(task)
+            session.flush()
+        else:
+            task = existing_task
+        # Assign to every user who has role=student and student_index set
+        student_indices_with_account = [
+            row[0]
+            for row in session.query(User.student_index)
+            .filter(User.role == "student", User.student_index.isnot(None))
+            .distinct()
+            .all()
+        ]
+        for idx in student_indices_with_account:
+            existing = (
+                session.query(TaskAssignment)
+                .filter(
+                    TaskAssignment.task_id == task.id,
+                    TaskAssignment.student_index == idx,
+                )
+                .first()
+            )
+            if not existing:
+                session.add(
+                    TaskAssignment(
+                        task_id=task.id,
+                        student_index=idx,
+                        status="ASSIGNED",
+                    )
+                )
+
 
 def write_credentials(credentials_path: Path) -> None:
     """Append consultation test credentials to a file."""
@@ -302,18 +390,23 @@ def write_credentials(credentials_path: Path) -> None:
                 lines.append(
                     f"- **{p.first_name} {p.last_name}**: username `{u.username}`")
         lines.append("")
-        lines.append("## Students (first 3 from DB)")
-        students = search_students(limit=3)
-        for s in students:
-            u = session.query(User).filter(
-                User.student_index == s["index"]).first()
+        lines.append("## Students (all with linked accounts)")
+        student_users = (
+            session.query(User)
+            .filter(User.role == "student", User.student_index.isnot(None))
+            .order_by(User.username)
+            .all()
+        )
+        for u in student_users:
             st = session.query(Student).filter(
-                Student.index == s["index"]).first()
-            email = st.email if st and getattr(st, "email", None) else ""
+                Student.index == u.student_index
+            ).first()
+            name = f"{st.first_name} {st.last_name}" if st else f"index {u.student_index}"
+            email = getattr(st, "email", None) if st else ""
             extra = f" email `{email}`" if email else ""
-            if u:
-                lines.append(
-                    f"- **{s['first_name']} {s['last_name']}** (index {s['index']}): username `{u.username}`{extra}")
+            lines.append(
+                f"- **{name}** (index {u.student_index}): username `{u.username}`{extra}"
+            )
         lines.append("")
         lines.append("## Admin")
         admin = session.query(User).filter(User.role == "admin").first()
